@@ -11,7 +11,9 @@ class AlgorithmUtils:
         for i in range(len(node_id_list) - 1):
             u, v = node_id_list[i], node_id_list[i + 1]
             try:
-                # NetworkX altyapısını kullanıyoruz
+                # Bağlantı yoksa veya kopuksa hata vermemesi için
+                if not nx.has_path(G, u, v):
+                    return None
                 p = nx.shortest_path(G, u, v, weight="delay")
             except nx.NetworkXNoPath:
                 return None
@@ -24,63 +26,78 @@ class AlgorithmUtils:
 
     @staticmethod
     def calculate_metrics(graph_obj, path_ids):
+        """
+        PDF Madde 3: Metrik Hesaplamaları
+        Geriye Dönüş: (Toplam Gecikme, Güvenilirlik Maliyeti, Kaynak Maliyeti)
+        """
         G = graph_obj.nx_graph
+        
         total_delay = 0
-        total_bandwidth = []
-        #total_reliability = []
-        #path_reliability = 1.0
-        reliability_cost = 0.0
+        reliability_cost = 0.0 # Logaritmik toplam (Minimizasyon için)
+        bandwidth_cost = 0.0   # 1000/BW toplamı (Minimizasyon için)
 
+        # 1. Kenarlar (Links) Üzerindeki Maliyetler
         for i in range(len(path_ids) - 1):
             u, v = path_ids[i], path_ids[i + 1]
-            data = G.edges[u, v]
             
-            total_delay += data["delay"]
-            total_bandwidth.append(data["bandwidth"])
-            #path_reliability *= data["reliability"]
-            reliability_cost += -math.log(data["reliability"] + 1e-12)
+            # Link verilerini al (Link nesnesi üzerinden de alınabilir ama graph hızlıdır)
+            # Not: NetworkGraph oluştururken nx graph'a da attribute eklediğini varsayıyoruz.
+            # Eğer eklemediysen graph_obj.links içinde arama yapmak gerekir.
+            # Kodun önceki halinde G.edges[u,v] kullanıldığı için ona uyumlu devam ediyorum.
+            if (u, v) in G.edges:
+                data = G.edges[u, v]
+                delay = data.get("delay", 0)
+                bw = data.get("bandwidth", 100) # Varsayılan 100
+                rel = data.get("reliability", 0.99)
+            else:
+                 # Yönlendirilmiş/Yönlendirilmemiş grafik hatası önlemi
+                 continue
 
-            #total_reliability.append(data["reliability"])
-        for node_id in path_ids:
-         node = graph_obj.get_node(node_id)
-         if node:
-            total_delay += node.s_ms
-            #path_reliability *= node.reliability
-            reliability_cost += -math.log(node.reliability + 1e-12)
+            # PDF 3.1: Link Delay
+            total_delay += delay
+            
+            # PDF 3.2: -log(Link Reliability)
+            reliability_cost += -math.log(rel + 1e-12)
+            
+            # PDF 3.3: (1 Gbps / Bandwidth_ij) -> 1000 / BW
+            bandwidth_cost += (1000.0 / (bw + 1e-9))
+
+        # 2. Düğümler (Nodes) Üzerindeki Maliyetler
+        # PDF 3.1 Notu: Kaynak (S) ve Hedef (D) hariç ara düğümlerin işlem süreleri
+        if len(path_ids) > 2:
+            intermediate_nodes = path_ids[1:-1] # İlk ve son hariç
+            for node_id in intermediate_nodes:
+                node = graph_obj.get_node(node_id)
+                if node:
+                    total_delay += node.s_ms
+                    reliability_cost += -math.log(node.reliability + 1e-12)
         
+        # PDF 3.2 Notu: Kaynak ve Hedefin güvenilirliği formülde genellikle dahildir
+        # ancak gecikmede hariçtir. PDF tam net değil ama güvenilirlik tüm sistemdir.
+        # Güvenilirlik için uç düğümleri de ekliyoruz:
+        start_node = graph_obj.get_node(path_ids[0])
+        end_node = graph_obj.get_node(path_ids[-1])
+        if start_node: reliability_cost += -math.log(start_node.reliability + 1e-12)
+        if end_node: reliability_cost += -math.log(end_node.reliability + 1e-12)
 
-        delay_score = total_delay
-        # reliability_cost = 1 - min(total_reliability) if total_reliability else 1 
-        #underflow riski reliability_cost = -math.log(path_reliability + 1e-12)
-        #reliability_cost = 1 - path_reliability
-        bandwidth_cost = 1 / (min(total_bandwidth)+1) if total_bandwidth else 1
-
-        return delay_score, reliability_cost, bandwidth_cost
+        return total_delay, reliability_cost, bandwidth_cost
 
     @staticmethod
     def get_bandwidth(graph_obj, path_ids):
-      
-        if not path_ids: return 0
+        if not path_ids: return "0"
         
-        source_id = str(path_ids[0]).strip()
-        target_id = str(path_ids[-1]).strip()
-        
-        required_bw = 0
-        key = source_id + target_id
-        if key in graph_obj.demands:
-            required_bw = graph_obj.demands[key]
-           
-        path_bw=[]    
+        path_bw = []    
         for i in range(len(path_ids) - 1):
-         bw = AlgorithmUtils.get_link_a_to_b(graph_obj,path_ids[i],path_ids[i + 1])
-         path_bw.append(bw)
+             bw = AlgorithmUtils.get_link_a_to_b(graph_obj, path_ids[i], path_ids[i + 1])
+             path_bw.append(f"{bw:.1f}")
          
-         
-        return f"Required BW: {required_bw}\nPath Bandwidths: {path_bw}"
+        return f"Path BWs: {path_bw}"
 
-    
-    def get_link_a_to_b(graph_obj,a_node,b_node): 
+    @staticmethod
+    def get_link_a_to_b(graph_obj, a_node, b_node): 
+        # graph_obj.links listesi içinde arama yapar
         for link in graph_obj.links: 
-            if ( (link.source.id == a_node and link.target.id == b_node) or 
-                (link.source.id == b_node and link.target.id == a_node) ): 
-             return link.bandwidth
+            if ((link.source.id == a_node and link.target.id == b_node) or 
+                (link.source.id == b_node and link.target.id == a_node)): 
+                return link.bandwidth
+        return 1.0 # Bulunamazsa hata vermemesi için

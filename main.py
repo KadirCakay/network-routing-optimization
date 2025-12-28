@@ -4,11 +4,13 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import networkx as nx
 import time
+import math
 
 # --- Modülleri İçe Aktar ---
 from generate.ReadData import ReadData
 from generate.TopologyGenerator import TopologyGenerator
 from algorithm.GeneticAlgorithm import GeneticAlgorithm
+from algorithm.ACOAlgorithm import ACOAlgorithm  # ACO Eklendi
 from algorithm.AlgorithmUtils import AlgorithmUtils
 
 # Global değişken
@@ -21,7 +23,7 @@ def load_graph():
         if source_type == "Random":
             gen = TopologyGenerator()
             network_graph = gen.generate(num_nodes=250)
-            msg = "Rastgele Topology Oluşturuldu."
+            msg = "Rastgele Topology Oluşturuldu (250 Node)."
         else:
             reader = ReadData()
             network_graph = reader.read()
@@ -37,35 +39,27 @@ def load_graph():
 def draw_graph(path=None):
     if network_graph is None: return
     
-    plt.clf() # Eski çizimi temizle
+    plt.clf()
     G = network_graph.nx_graph
-    # Büyük graflarda tutarlılık için seed sabitliyoruz
     pos = nx.spring_layout(G, seed=42)
     
-    # 1. Tüm düğümleri varsayılan renkte (açık mavi) çiz
     nx.draw(G, pos, node_size=20, node_color='lightblue', with_labels=False)
     
     if path:
-        # Yol bulunduysa işlemleri yap:
-        
-        # 2. Yol üzerindeki KENARLARI (Linkleri) Kırmızı çizgi yap
         nx.draw_networkx_edges(G, pos, 
                                edgelist=list(zip(path, path[1:])), 
                                edge_color="red", width=2)
         
-        # 3. Ara düğümleri (Başlangıç ve Bitiş HARİÇ) Kırmızı nokta yap
         if len(path) > 2:
             intermediate_nodes = path[1:-1]
             nx.draw_networkx_nodes(G, pos, nodelist=intermediate_nodes, 
                                    node_color="red", node_size=30)
             
-        # 4. BAŞLANGIÇ NODU (path[0]) -> YEŞİL
         nx.draw_networkx_nodes(G, pos, nodelist=[path[0]], 
-                               node_color="green", node_size=80) # Biraz daha büyük (80)
+                               node_color="green", node_size=80)
         
-        # 5. HEDEF NODU (path[-1]) -> KIRMIZI
         nx.draw_networkx_nodes(G, pos, nodelist=[path[-1]], 
-                               node_color="red", node_size=80)   # Biraz daha büyük (80)
+                               node_color="red", node_size=80)
         
     canvas.draw()
 
@@ -81,59 +75,74 @@ def calculate():
         return
         
     try:
-        S = int(entry_s.get())
-        D = int(entry_d.get())
-        w1 = float(entry_w1.get())
-        w2 = float(entry_w2.get())
-        w3 = float(entry_w3.get())
+        # Girdileri Al
+        try:
+            S = int(entry_s.get())
+            D = int(entry_d.get())
+            w1 = float(entry_w1.get()) # Delay Ağırlığı
+            w2 = float(entry_w2.get()) # Reliability Ağırlığı
+            w3 = float(entry_w3.get()) # Bandwidth Ağırlığı
+        except ValueError:
+             messagebox.showerror("Hata", "Lütfen tüm alanlara sayısal değer girin.")
+             return
+
         algo_name = algo_var.get()
         
-        # Algoritma Seçimi ve Çalıştırma
+        # Algoritma Çalıştırma
         start_time = time.time()
         path = None
         
-        if algo_name == "GA":
+        if algo_name == "GA (Genetik)":
             solver = GeneticAlgorithm(network_graph, w1, w2, w3)
             path = solver.solve(S, D)
-        elif algo_name == "Dijkstra":
-            # Dijkstra sınıfını çağır
-            solver = DijkstraAlgorithm(network_graph, w1, w2, w3)
+        elif algo_name == "ACO (Karınca)":
+            solver = ACOAlgorithm(network_graph, w1, w2, w3)
             path = solver.solve(S, D)
             
-        duration = (time.time() - start_time) * 1000
+        duration = (time.time() - start_time) * 1000 # ms cinsinden
         
         if not path:
-            log_message("Yol Bulunamadı.")
+            log_message(f"{algo_name} ile {S}->{D} arasında yol bulunamadı.")
             return
 
-        # Sonuç Hesaplama
-        d, r_cost, b_cost = AlgorithmUtils.calculate_metrics(network_graph, path)
-        total_cost = w1*d + w2*r_cost + w3*b_cost
+        # Sonuç Hesaplama (AlgorithmUtils güncellendiği için burası doğru çalışacak)
+        total_delay, rel_cost, bw_cost = AlgorithmUtils.calculate_metrics(network_graph, path)
         
-        # Helper sınıfında metod ismi get_max_bandwidth idi, burayı düzelttim
-        max_bw = AlgorithmUtils.get_bandwidth(network_graph, path)
-        real_rel = 1.0 - r_cost
+        # Toplam Skor (Fitness)
+        # Not: Reliability ve BW cost değerleri logaritmik/ters olduğu için
+        # ağırlıklarla direkt çarpmak bazen dengesiz olabilir ama PDF'teki "Weighted Sum" formülü bu.
+        total_fitness = (w1 * total_delay) + (w2 * rel_cost * 100) + (w3 * bw_cost)
+        
+        # Ekrana basılacak gerçek güvenilirlik değeri (Cost'tan geri dönüşüm)
+        # Cost = -ln(R)  =>  R = e^(-Cost)
+        real_reliability = math.exp(-rel_cost)
+        
+        bw_info = AlgorithmUtils.get_bandwidth(network_graph, path)
         
         sb = f">>> SONUÇ ({algo_name}) <<<\n"
         sb += f"Kaynak: {S} -> Hedef: {D}\n"
-        sb += f"Adım: {len(path)-1}\n"
-        sb += f"Adımlar: {path}\n"
-        sb += f"Süre: {duration:.2f} ms\n"
-        sb += f"Gecikme: {d:.4f}\n"
-        sb += f"Güvenilirlik: {real_rel:.6f}\n"
-        sb += f"Maliyet: {total_cost:.4f}\n"
-        sb += f"Bandwidth: {max_bw}{' (Belirtilmemiş)' if max_bw == 0 else ''}\n"
+        sb += f"Adım Sayısı: {len(path)-1}\n"
+        sb += f"Yol: {path}\n"
+        sb += f"Çalışma Süresi: {duration:.2f} ms\n"
+        sb += f"--------------------------------\n"
+        sb += f"Toplam Gecikme (Delay): {total_delay:.4f} ms\n"
+        sb += f"Toplam Güvenilirlik: {real_reliability:.6f}\n"
+        sb += f"Güvenilirlik Maliyeti (-log): {rel_cost:.4f}\n"
+        sb += f"Kaynak Maliyeti (1000/BW): {bw_cost:.4f}\n"
+        sb += f"--------------------------------\n"
+        sb += f"HESAPLANAN SKOR (Cost): {total_fitness:.4f}\n"
+        sb += f"Detay: {bw_info}\n"
         
         log_message(sb)
         draw_graph(path)
 
     except Exception as e:
-        log_message(f"Hata: {e}")
+        log_message(f"Beklenmeyen Hata: {e}")
         print(e)
 
 # --- GUI BAŞLANGIÇ ---
 window = tk.Tk()
-window.title("BSM307 - Mimari Yapı")
+window.title("BSM307 - Proje (GA & ACO)")
 window.geometry("1200x750")
 
 main_frame = tk.Frame(window)
@@ -149,11 +158,11 @@ right = tk.Frame(main_frame, bg="white")
 right.pack(side="right", fill="both", expand=True, padx=10, pady=10)
 
 # Kontroller
-tk.Label(left, text="Kaynak:", bg="#f0f0f0", font=("Arial", 11, "bold")).pack(anchor="w")
+tk.Label(left, text="Ağ Kaynağı:", bg="#f0f0f0", font=("Arial", 11, "bold")).pack(anchor="w")
 graph_source_var = tk.StringVar(value="Random")
-tk.Radiobutton(left, text="Random", variable=graph_source_var, value="Random", bg="#f0f0f0").pack(anchor="w")
-tk.Radiobutton(left, text="CSV", variable=graph_source_var, value="CSV", bg="#f0f0f0").pack(anchor="w")
-tk.Button(left, text="Yükle / Oluştur", command=load_graph, bg="green", fg="white").pack(fill="x", pady=5)
+tk.Radiobutton(left, text="Random (250 Node)", variable=graph_source_var, value="Random", bg="#f0f0f0").pack(anchor="w")
+tk.Radiobutton(left, text="CSV Dosyası", variable=graph_source_var, value="CSV", bg="#f0f0f0").pack(anchor="w")
+tk.Button(left, text="Ağı Yükle / Oluştur", command=load_graph, bg="green", fg="white").pack(fill="x", pady=5)
 
 tk.Label(left, text="Kaynak Node ID (S):", bg="#f0f0f0").pack(anchor="w", pady=(10,0))
 entry_s = tk.Entry(left)
@@ -165,19 +174,20 @@ entry_d.pack(fill="x", pady=(0, 5))
 
 tk.Label(left, text="Algoritma:", bg="#f0f0f0").pack(anchor="w", pady=(5,0))
 algo_var = tk.StringVar()
-# Dijkstra seçeneğini combobox'a ekledim
-combo = ttk.Combobox(left, textvariable=algo_var, values=["GA","Dijkstra"])
+# SADECE GA VE ACO SEÇENEKLERİ
+combo = ttk.Combobox(left, textvariable=algo_var, values=["GA (Genetik)", "ACO (Karınca)"])
 combo.current(0)
 combo.pack(fill="x")
 
-tk.Label(left, text="Ağırlıklar (Delay, Rel, BW):", bg="#f0f0f0").pack(anchor="w", pady=(10,0))
-entry_w1 = tk.Entry(left); entry_w1.insert(0,"0.5"); entry_w1.pack(fill="x")
-entry_w2 = tk.Entry(left); entry_w2.insert(0,"0.3"); entry_w2.pack(fill="x")
-entry_w3 = tk.Entry(left); entry_w3.insert(0,"0.2"); entry_w3.pack(fill="x")
+tk.Label(left, text="Ağırlıklar (Delay, Reliability, BW):", bg="#f0f0f0").pack(anchor="w", pady=(10,0))
+# Varsayılan ağırlıklar PDF örneğine uygun
+entry_w1 = tk.Entry(left); entry_w1.insert(0,"0.33"); entry_w1.pack(fill="x") # Delay
+entry_w2 = tk.Entry(left); entry_w2.insert(0,"0.33"); entry_w2.pack(fill="x") # Reliability
+entry_w3 = tk.Entry(left); entry_w3.insert(0,"0.34"); entry_w3.pack(fill="x") # Resource
 
 tk.Button(left, text="HESAPLA", command=calculate, bg="blue", fg="white", font=("Arial", 12, "bold")).pack(fill="x", pady=20)
 
-result_text = tk.Text(left, height=15, bg="#ddd", font=("Consolas", 10))
+result_text = tk.Text(left, height=20, bg="#ddd", font=("Consolas", 9))
 result_text.pack(fill="both", expand=True)
 
 # Grafik

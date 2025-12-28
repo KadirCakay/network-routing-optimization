@@ -9,14 +9,19 @@ class TopologyGenerator:
         graph = NetworkGraph()
         
         # NetworkX kullanarak rastgele topoloji iskeleti oluştur
-        G_temp = nx.erdos_renyi_graph(num_nodes, prob)
+        # Erdős-Rényi modeli (PDF Madde 2.1)
+        G_temp = nx.erdos_renyi_graph(num_nodes, prob, seed=42)
 
         # Node'ları Model'e aktar
         for n_id in G_temp.nodes():
-            rel = random.uniform(0.90, 0.999)
+            # PDF Madde 2.2: Node Reliability [0.95 - 0.999]
+            rel = random.uniform(0.95, 0.999)
+            # PDF Madde 2.2: Processing Delay [0.5 ms - 2.0 ms]
             s_ms = random.uniform(0.5, 2.0)
-            node = Node(n_id, reliability=rel,s_ms=s_ms)
-            # Rastgele koordinat (Görselleştirme için)
+            
+            node = Node(n_id, reliability=rel, s_ms=s_ms)
+            
+            # Görselleştirme için rastgele koordinat
             node.x = random.uniform(10, 100)
             node.y = random.uniform(10, 100)
             graph.add_node(node)
@@ -26,9 +31,12 @@ class TopologyGenerator:
             src = graph.get_node(u)
             dst = graph.get_node(v)
             
-            delay = random.uniform(1, 10)
-            bw = random.uniform(10, 100)
-            rel = random.uniform(0.90, 0.999)
+            # PDF Madde 2.3: Link Delay [3 ms - 15 ms]
+            delay = random.uniform(3, 15)
+            # PDF Madde 2.3: Bandwidth [100 Mbps - 1000 Mbps]
+            bw = random.uniform(100, 1000)
+            # PDF Madde 2.3: Link Reliability [0.95 - 0.999]
+            rel = random.uniform(0.95, 0.999)
 
             link = Link(src, dst, delay, bw, rel)
             graph.add_link(link)
