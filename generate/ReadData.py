@@ -5,7 +5,7 @@ from model.NetworkGraph import NetworkGraph
 
 class ReadData:
     def __init__(self):
-        # Dosya yollarını buraya güncelleyin
+        
        self.NODE_PATH = r"documents\BSM307_317_Guz2025_TermProject_NodeData.csv"
        self.LINK_PATH = r"documents\BSM307_317_Guz2025_TermProject_EdgeData.csv"
        self.DEMAND_PATH = r"documents\BSM307_317_Guz2025_TermProject_DemandData.csv"
